@@ -1,0 +1,112 @@
+# ---- Python bytecode / caches ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ---- Build / packaging ----
+build/
+dist/
+*.egg-info/
+.eggs/
+.eggs/**
+*.egg
+wheels/
+parts/
+var/
+sdist/
+share/python-wheels/
+MANIFEST
+
+# ---- PyInstaller / py2exe ----
+*.manifest
+*.spec
+
+# ---- Unit test / coverage ----
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+pytest_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+nosetests.xml
+junit.xml
+.cache/
+
+# ---- Logs & runtime artifacts ----
+logs/
+*.log
+*.tmp
+*.temp
+*.pid
+
+# ---- Data / media (keep reference JSON, ignore large media) ----
+# Comment out if you intentionally want to version videos
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wav
+*.mp3
+
+# ---- Model weights / checkpoints ----
+*.pth
+*.pt
+*.onnx
+*.ckpt
+
+# ---- Jupyter / IPython ----
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# ---- Editors / IDE metadata ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*.code-workspace
+
+# ---- OS / misc ----
+.DS_Store
+Thumbs.db
+*.orig
+*.rej
+
+# ---- Environment / secrets ----
+.env
+.env.*
+*.env
+.envrc
+*.key
+*.pem
+
+# ---- Cache / tooling ----
+.mypy_cache/
+.pyre/
+.pytype/
+Pipfile.lock
+poetry.lock
+pip-wheel-metadata/
+
+# ---- Temporary experiments ----
+experiment_*/
+/tmp/
+
+# ---- Lock files (optional; uncomment if desired) ----
+# package-lock.json
+# yarn.lock
+
+# ---- Project specific notes ----
+# reference_data.json is kept intentionally (DON'T IGNORE)
+# Remove comment on patterns above if you decide to version media or weights.
