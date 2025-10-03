@@ -3,7 +3,7 @@ import numpy as np
 import time
 import sys
 from headpose_extractor import HeadPoseExtractor
-from rep_detector import RepDetector, FlexionExtensionDetector
+from rep_detector import RepDetector, FlexionExtensionDetector, LateralFlexionDetector
 from feedback_engine import FeedbackEngine
 
 # Global animation state
@@ -216,7 +216,7 @@ def show_exercise_menu():
     print("\nAvailable Exercises:")
     print("1. Rotation Exercise (Left-Right)")
     print("2. Flexion-Extension (Up-Down)")
-    print("3. Lateral Flexion (Side Bending) [Coming Soon]")
+    print("3. Lateral Flexion (Side Bending)")
     print("4. Combined Movements [Coming Soon]")
     print("5. Exit")
     print("\n" + "-"*50)
@@ -747,12 +747,199 @@ def create_flexion_extension_display(live_frame, rep_count, rep_detector):
     
     return display_frame
 
-def lateral_flexion_exercise():
-    """Placeholder for lateral flexion (side bending) exercise"""
-    print("\n🚧 Lateral Flexion Exercise")
-    print("This exercise will guide you through side-to-side neck bending.")
-    print("Coming soon! Returning to main menu...")
-    time.sleep(2)
+def lateral_flexion_exercise(checkpoint_path="model/state_of_the_art.pth", sample_video_path="rotation/tilled.mp4"):
+    """Lateral Flexion (side bending) exercise with demo sample video.
+
+    Sequence: CENTER → LEFT TILT → CENTER → RIGHT TILT → CENTER
+    Detection axis: roll (negative = left tilt, positive = right tilt after mirroring).
+    Neutral constraints enforced: yaw ∈ [-15°, +15°], pitch ∈ [-15°, +15°].
+    A demonstration video (tilled.mp4) is shown on the right to guide the user, similar
+    to rotation and flexion-extension exercises. The sample video is display-only and
+    not used for processing.
+    """
+    headpose = HeadPoseExtractor(checkpoint_path)
+    # Detector with requested yaw/pitch neutrality window
+    rep_detector = LateralFlexionDetector(roll_threshold=15.0, center_threshold=5.0,
+                                          yaw_min=-15.0, yaw_max=15.0, pitch_min=-15.0, pitch_max=15.0)
+    feedback = FeedbackEngine(
+        tolerance_base=4,
+        angle_tolerance=10,
+        yaw_threshold=15.0,
+        center_threshold=5.0
+    )
+
+    print("✅ Lateral Flexion Exercise initialized (yaw/pitch neutral window -15° to +15°).")
+    baseline_angles = calibrate_user(headpose)
+    print(f"✅ Calibration complete. Baseline: Yaw={baseline_angles[0]:.1f}°, Pitch={baseline_angles[1]:.1f}°, Roll={baseline_angles[2]:.1f}°")
+    time.sleep(0.4)
+
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        raise IOError("Cannot open webcam")
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
+
+    frame_buffer = []
+    rep_count = 0
+    window_name = "Lateral Flexion Exercise"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    try:
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        is_fullscreen = True
+    except Exception:
+        is_fullscreen = False
+    print("Controls: q quit | f fullscreen | a audio | r restart demo")
+    print("Sequence: CENTER → LEFT TILT → CENTER → RIGHT TILT → CENTER")
+    print("Maintain neutral yaw/pitch within ±15°.")
+
+    # Sample demo video (display only) timing management
+    sample_cap = None
+    sample_fps = 0
+    sample_frame = None
+    sample_accum = 0.0
+    sample_last_time = time.time()
+    if sample_video_path:
+        sc = cv2.VideoCapture(sample_video_path)
+        if sc.isOpened():
+            sample_cap = sc
+            sample_fps = sc.get(cv2.CAP_PROP_FPS) or 30.0
+            if sample_fps <= 1e-2:
+                sample_fps = 30.0
+            print(f"🎬 Lateral flexion sample video loaded: {sample_video_path} ({sample_fps:.2f} FPS)")
+        else:
+            print(f"⚠️ Could not open lateral flexion sample video: {sample_video_path}")
+    else:
+        print("ℹ️ No lateral flexion sample video path provided.")
+
+    while True:
+        loop_start = time.time()
+        ret, live_frame = cap.read()
+        if not ret:
+            break
+        live_frame = cv2.flip(live_frame, 1)
+
+        # Downscale for processing
+        try:
+            proc_scale = 0.5
+            ph, pw = int(live_frame.shape[0]*proc_scale), int(live_frame.shape[1]*proc_scale)
+            proc_frame = cv2.resize(live_frame, (pw, ph))
+        except Exception:
+            proc_frame = live_frame
+        live_angles = headpose.process_frame(proc_frame)
+
+        # Layout (side-by-side like other exercises)
+        target_h = 1080
+        half_w = 960
+        live_resized = cv2.resize(live_frame, (half_w, target_h))
+        cv2.putText(live_resized, "LIVE", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0,255,255), 3)
+        cv2.putText(live_resized, f"Reps: {rep_count}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2)
+
+        rel_angles = None
+        if live_angles is not None:
+            rel_angles = live_angles - baseline_angles
+            yaw_ok = -15.0 < rel_angles[0] < 15.0
+            pitch_ok = -15.0 < rel_angles[1] < 15.0
+            color_yaw = (0,255,0) if yaw_ok else (0,0,255)
+            color_pitch = (0,255,0) if pitch_ok else (0,0,255)
+            y_base = target_h - 120
+            cv2.putText(live_resized, f"Yaw: {rel_angles[0]:.1f}°", (20, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_yaw, 2)
+            cv2.putText(live_resized, f"Pitch: {rel_angles[1]:.1f}°", (20, y_base+30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_pitch, 2)
+            cv2.putText(live_resized, f"Roll: {rel_angles[2]:.1f}°", (20, y_base+60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+        else:
+            cv2.putText(live_resized, "No face detected", (20, target_h-60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+
+        # Sample pane (right) - time-synchronized playback
+        if sample_cap:
+            now = time.time()
+            dt = now - sample_last_time
+            sample_last_time = now
+            sample_accum += dt
+            frame_period = 1.0 / sample_fps if sample_fps > 0 else 1/30.0
+            while sample_accum >= frame_period:
+                ret_s, sf = sample_cap.read()
+                if not ret_s:
+                    sample_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret_s, sf = sample_cap.read()
+                if ret_s:
+                    sample_frame = sf
+                sample_accum -= frame_period
+            if sample_frame is None:
+                ret_init, sf = sample_cap.read()
+                if ret_init:
+                    sample_frame = sf
+            if sample_frame is not None:
+                sample_resized = cv2.resize(sample_frame, (half_w, target_h))
+            else:
+                sample_resized = np.zeros((target_h, half_w, 3), dtype=np.uint8)
+        else:
+            sample_resized = np.zeros((target_h, half_w, 3), dtype=np.uint8)
+            cv2.putText(sample_resized, "NO SAMPLE", (200, target_h//2), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (200,200,200), 3)
+
+        # Guidance overlays on sample pane
+        cv2.putText(sample_resized, "SAMPLE", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0,255,255), 3)
+        cv2.putText(sample_resized, "Sequence: CENTER → LEFT → CENTER → RIGHT → CENTER", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,0), 2)
+        cv2.putText(sample_resized, "Keep face forward (avoid yaw)", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,0), 2)
+        cv2.putText(sample_resized, "No nodding (limit pitch)", (20, 175), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,0), 2)
+        cv2.putText(sample_resized, "Smooth controlled tilt", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,0), 2)
+
+        display_frame = np.hstack([live_resized, sample_resized])
+        cv2.putText(display_frame, "Controls: Q=Quit | F=Fullscreen | A=Audio | R=Restart Demo", (20, 1050), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220,220,220), 2)
+
+        if rel_angles is not None:
+            frame_buffer.append({
+                "t": cap.get(cv2.CAP_PROP_POS_MSEC)/1000.0,
+                "yaw": rel_angles[0],
+                "pitch": rel_angles[1],
+                "roll": rel_angles[2]
+            })
+            if rep_detector.detect_rep(frame_buffer):
+                rep_count += 1
+                print(f"✅ Lateral Flexion Repetition {rep_count} completed!")
+                start_rep_animation(rep_count)
+            metrics = {"status": "lateral_flexion_tracking"}
+            feedback.display_feedback(display_frame, metrics, rel_angles, None, rep_count=rep_count, rep_state=rep_detector.state)
+            feedback.display_summary(rep_count, metrics)
+
+        display_frame = draw_rep_animation_overlay(display_frame)
+        cv2.imshow(window_name, display_frame)
+
+        # Frame pacing
+        try:
+            cam_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        except Exception:
+            cam_fps = 30.0
+        target_fps = max(15, cam_fps)
+        frame_interval = 1.0/float(target_fps)
+        loop_elapsed = time.time() - loop_start
+        if loop_elapsed < frame_interval:
+            time.sleep(frame_interval - loop_elapsed)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord('f'):
+            is_fullscreen = not is_fullscreen
+            try:
+                cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN if is_fullscreen else cv2.WINDOW_NORMAL)
+            except Exception:
+                pass
+        elif key == ord('a'):
+            audio_enabled = feedback.toggle_audio_feedback()
+            print(f"Audio feedback {'enabled' if audio_enabled else 'disabled'}")
+        elif key == ord('r') and sample_cap:
+            sample_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            sample_accum = 0.0
+            sample_frame = None
+            sample_last_time = time.time()
+            print("🔄 Lateral flexion sample demo restarted")
+
+    cap.release()
+    if sample_cap:
+        sample_cap.release()
+    cv2.destroyWindow(window_name)
+    headpose.close()
 
 def combined_movements_exercise():
     """Placeholder for combined movements exercise"""

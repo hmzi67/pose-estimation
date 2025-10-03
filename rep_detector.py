@@ -249,3 +249,113 @@ class FlexionExtensionDetector:
             "state_time": self.state_time,
             "progress": min(self.state / 3.0, 1.0)  # Progress as a fraction 0-1
         }
+
+
+class LateralFlexionDetector:
+    """
+    Detects a full lateral flexion (side bending) rep defined as:
+      center → LEFT TILT → center → RIGHT TILT → center
+
+    Axis mapping:
+      - Roll is used for left/right tilt detection (negative = left tilt, positive = right tilt
+        assuming standard right-handed camera coordinates after mirroring).
+      - Yaw and pitch constraints ensure user is not rotating or nodding excessively during side bending.
+
+    States:
+      0 = waiting (center)
+      1 = left tilt reached (roll <= -roll_threshold)
+      2 = returned to center after left tilt
+      3 = right tilt reached (roll >= roll_threshold)
+      Return to center from state 3 completes a rep and resets to 0.
+    """
+
+    def __init__(self, buffer_size=300, roll_threshold=15.0, center_threshold=5.0, hold_frames=3,
+                 yaw_min=-20.0, yaw_max=20.0, pitch_min=-20.0, pitch_max=20.0):
+        self.buffer_size = buffer_size
+        self.roll_threshold = roll_threshold
+        self.center_threshold = center_threshold
+        self.hold_frames = hold_frames
+
+        # Form constraints (exclusive window): keep head otherwise neutral
+        self.yaw_min = yaw_min
+        self.yaw_max = yaw_max
+        self.pitch_min = pitch_min
+        self.pitch_max = pitch_max
+
+        self.state = 0
+        self.buffer = []
+        self.state_time = 0
+        self.last_state_change = 0
+
+    def detect_rep(self, frame_buffer):
+        if not frame_buffer:
+            return False
+
+        self.buffer = frame_buffer[-self.buffer_size:]
+
+        yaws = np.array([frame.get("yaw", 0.0) for frame in self.buffer])
+        pitches = np.array([frame.get("pitch", 0.0) for frame in self.buffer])
+        rolls = np.array([frame.get("roll", 0.0) for frame in self.buffer])
+
+        n = min(self.hold_frames, len(rolls))
+        recent_mean_yaw = float(np.mean(yaws[-n:]))
+        recent_mean_pitch = float(np.mean(pitches[-n:]))
+        recent_mean_roll = float(np.mean(rolls[-n:]))
+
+        # Enforce yaw/pitch constraints (prevent rotation or nodding during side bend)
+        yaw_ok = (self.yaw_min < recent_mean_yaw < self.yaw_max)
+        pitch_ok = (self.pitch_min < recent_mean_pitch < self.pitch_max)
+        if not (yaw_ok and pitch_ok):
+            if self.state != 0:
+                self.last_state_change = len(self.buffer)
+                print(f"⚠️  Lateral flexion reset (yaw={recent_mean_yaw:.1f}°, pitch={recent_mean_pitch:.1f}° outside neutral)")
+            self.state = 0
+            self.state_time = 0
+            return False
+
+        rep_detected = False
+        state_changed = False
+
+        if self.state == 0:
+            if recent_mean_roll <= -self.roll_threshold:
+                self.state = 1
+                state_changed = True
+                print(f"🔄 Left tilt detected (roll: {recent_mean_roll:.1f}°)")
+        elif self.state == 1:
+            if abs(recent_mean_roll) <= self.center_threshold:
+                self.state = 2
+                state_changed = True
+                print(f"🔄 Returned to center after left tilt (roll: {recent_mean_roll:.1f}°)")
+        elif self.state == 2:
+            if recent_mean_roll >= self.roll_threshold:
+                self.state = 3
+                state_changed = True
+                print(f"🔄 Right tilt detected (roll: {recent_mean_roll:.1f}°)")
+        elif self.state == 3:
+            if abs(recent_mean_roll) <= self.center_threshold:
+                rep_detected = True
+                self.state = 0
+                state_changed = True
+                print(f"✅ Lateral Flexion repetition completed! (roll: {recent_mean_roll:.1f}°)")
+
+        if state_changed:
+            self.last_state_change = len(self.buffer)
+            self.state_time = 0
+        else:
+            self.state_time = len(self.buffer) - self.last_state_change
+
+        return rep_detected
+
+    def get_state_info(self):
+        state_names = {
+            0: "Center (waiting)",
+            1: "Left tilt",
+            2: "Center (after left)",
+            3: "Right tilt"
+        }
+        return {
+            "state": self.state,
+            "state_name": state_names.get(self.state, "Unknown"),
+            "state_time": self.state_time,
+            "progress": min(self.state / 3.0, 1.0)
+        }
